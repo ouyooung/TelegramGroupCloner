@@ -13,7 +13,7 @@ from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.account import UpdateProfileRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import MessageMediaDocument, InputPhoto, InputChannel, PeerChat
+from telethon.tl.types import InputPhoto, InputChannel, PeerChat
 
 # 全局变量
 clients_pool = {}
@@ -93,12 +93,13 @@ source_group = ouyoung
 target_group = ouyoung
 
 [proxy]
+is_enabled = false
 host = 127.0.0.1
 port = 7890
 type = socks5
 
 [blacklist]
-user_ids = 123456789,987654321
+user_ids = 123,12345
 keywords = 上门，开课
 
 [replacements]

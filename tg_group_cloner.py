@@ -3,17 +3,17 @@ import logging
 import os
 import asyncio
 import random
+
 from typing import Dict
 from collections import defaultdict
 from typing import Optional, Union
-
-import telethon.events
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.account import UpdateProfileRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import InputPhoto, InputChannel, PeerChat
+from telethon.tl.custom.message import Message
 
 # 全局变量
 clients_pool = {}
@@ -39,8 +39,9 @@ class Config:
     PROXY = None
     SOURCE_GROUPS = []
     TARGET_GROUP: Union[PeerChat, InputChannel]
-    BLACK_LIST = set()
-    KEY_WORDS = set()
+    USER_IDS = set()
+    KEYWORDS = set()
+    NAMES = set()
     REPLACEMENTS = {}
     API_ID = None
     API_HASH = None
@@ -61,7 +62,6 @@ async def login_new_account() -> None:
             await client.sign_in(password=password)
 
     logger.info(f"克隆账号登录成功: {phone}")
-    await check_and_join_target(client)
 
 
 async def load_existing_sessions(choice: str) -> None:
@@ -93,14 +93,15 @@ source_group = ouyoung
 target_group = ouyoung
 
 [proxy]
-is_enabled = false
+is_enabled = true
 host = 127.0.0.1
 port = 7890
 type = socks5
 
 [blacklist]
-user_ids = 123,12345
-keywords = 上门，开课
+user_ids = 123, 12345
+keywords = 广告, 出售
+names = 定制, 机器人
 
 [replacements]
 a = b
@@ -131,13 +132,13 @@ a = b
             proxy_type = config.get("proxy", "type")
             Config.PROXY = (proxy_type, host, port)
 
-        # 更新黑名单
-        blacklist_str = config.get("blacklist", "user_ids", fallback="")
-        keywords_str = config.get("blacklist", "keywords", fallback="")
-        Config.BLACK_LIST.update(int(uid) for uid in blacklist_str.split(",") if uid.strip().isdigit())
-        Config.KEY_WORDS.update(keyword for keyword in keywords_str.split(",") if keyword.strip())
+        user_dis = config.get("blacklist", "user_ids", fallback="")
+        keywords = config.get("blacklist", "keywords", fallback="")
+        names = config.get("blacklist", "names", fallback="")
+        Config.USER_IDS.update(int(uid) for uid in user_dis.split(",") if uid.strip().isdigit())
+        Config.KEYWORDS.update(keyword for keyword in keywords.split(",") if keyword.strip())
+        Config.NAMES.update(name for name in names.split(",") if name.strip())
 
-        # 更新替换词
         if config.has_section("replacements"):
             Config.REPLACEMENTS.update(dict(config.items("replacements")))
 
@@ -185,30 +186,34 @@ async def check_and_join_source(client: TelegramClient, group: InputChannel) -> 
             logger.error(f"监听账号加入源群组失败: {e}")
 
 
-async def clone_and_forward_message(event, monitor_client: TelegramClient) -> None:
+async def clone_and_forward_message(event: Message, monitor_client: TelegramClient) -> None:
     sender = await event.get_sender()
 
     if not sender or sender.bot:
         return
 
     sender_id = sender.id
+    full_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
     lock = sender_locks[sender_id]
     async with lock:
-        if sender_id in Config.BLACK_LIST:
+        if sender_id in Config.USER_IDS:
+            logger.info(f"{sender_id} ID在黑名单中，跳过")
             return
 
-        if any(keyword in event.message.text for keyword in Config.KEY_WORDS):
+        if any(keyword in event.message.text for keyword in Config.KEYWORDS):
+            logger.info(f"{sender_id} 消息包含黑名单关键词，跳过")
             return
 
-        # if any(keyword in sender.first_name or sender.first_name for keyword in keywords):
-        #     return
+        if any(name in full_name for name in Config.NAMES):
+            logger.info(f"{sender_id} 昵称包含黑名单名称，跳过")
+            return
 
         # 已分配过的 client
         for client, cloned_user in clients_pool.items():
             if cloned_user == sender_id:
                 lock = client_locks[client]
                 async with lock:
-                    await asyncio.sleep(random.uniform(1, 5.5))
+                    await asyncio.sleep(random.uniform(1, 3.5))
                     try:
                         me = await client.get_me()
                         await forward_message_as(
@@ -217,7 +222,7 @@ async def clone_and_forward_message(event, monitor_client: TelegramClient) -> No
                     except Exception as e:
                         if "FROZEN_METHOD_INVALID" in str(e):
                             await cleanup_frozen_client(client, sender_id)
-                        logger.info(f"转发失败（已克隆用户）: {e}")
+                        logger.warning(f"转发失败（已克隆用户）: {e}")
                 return
 
         # 未分配的 client
@@ -279,11 +284,10 @@ async def clone_and_forward_message(event, monitor_client: TelegramClient) -> No
                             logger.warning(f"克隆失败: {e}")
                     return
 
-        logger.info("无可用账号进行克隆")
+        logger.warning("无可用账号进行克隆")
 
 
-async def forward_message_as(client: TelegramClient, event: telethon.events.NewMessage.Event,
-                             monitor_client: TelegramClient) -> None:
+async def forward_message_as(client: TelegramClient, event: Message, monitor_client: TelegramClient) -> None:
     message = event.message
     text = apply_replacements(message.text or "")
     target_group = Config.TARGET_GROUP
@@ -420,7 +424,7 @@ async def start_monitor() -> None:
     logger.info(f"开始监听消息")
 
     @monitor_client.on(events.NewMessage(chats=Config.SOURCE_GROUPS))
-    async def handler(event: telethon.events.NewMessage.Event):
+    async def handler(event: Message):
         try:
             await clone_and_forward_message(event, monitor_client)
         except Exception as e:
@@ -447,30 +451,23 @@ async def main():
         print("2. 开始监听")
         print("3. 清空历史头像")
         print("4. 加入目标群")
-        print("0. 退出程序")
 
         try:
             choice = input("请选择操作: ").strip()
         except KeyboardInterrupt:
-            print("\n已取消，退出程序")
             break
 
         if choice == '1':
             await login_new_account()
         elif choice == '2':
-            await load_existing_sessions(choice='2')
+            await load_existing_sessions(choice)
             await start_monitor()
         elif choice == '3':
-            await load_existing_sessions(choice='3')
+            await load_existing_sessions(choice)
             break
         elif choice == '4':
-            await load_existing_sessions(choice='4')
+            await load_existing_sessions(choice)
             break
-        elif choice == '0':
-            logger.info("退出程序成功")
-            break
-        else:
-            logger.info("无效选择，请重新输入")
 
 
 if __name__ == '__main__':

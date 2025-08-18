@@ -15,7 +15,6 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import InputPhoto, InputChannel, PeerChat
 from telethon.tl.custom.message import Message
 
-# 全局变量
 clients_pool = {}
 client_locks = {}
 sender_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -434,7 +433,7 @@ async def start_monitor() -> None:
 
 
 async def main():
-    os.system("title TelegramGroupCloner v1.5.0")
+    os.system("title TelegramGroupCloner")
 
     load_config()
 

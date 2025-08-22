@@ -7,8 +7,7 @@ from collections import defaultdict
 from typing import Optional
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
-from telethon.tl.functions.account import UpdateProfileRequest
-from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
+from telethon.tl.functions.photos import DeletePhotosRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import InputPhoto, InputChannel
 from telethon.tl.custom.message import Message

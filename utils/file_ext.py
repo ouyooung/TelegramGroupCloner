@@ -2,8 +2,7 @@ import configparser
 import os
 
 from typing import Union
-from pyrogram.raw.types import PeerChat
-from telethon.tl.types import InputChannel
+from telethon.tl.types import InputChannel, PeerChat
 from utils.log import logger
 
 

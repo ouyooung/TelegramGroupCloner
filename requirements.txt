@@ -1,2 +1,4 @@
 pyinstaller
 telethon
+requests[socks]
+pysocks

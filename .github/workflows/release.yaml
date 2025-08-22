@@ -8,6 +8,7 @@ on:
       - '**.md'
       - '.gitignore'
       - '.editorconfig'
+      - 'requirements.txt'
 
 permissions:
   contents: write
@@ -34,7 +35,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller -F tg_group_cloner.py -n TelegramGroupCloner -w
+          pyinstaller -F tg_group_cloner.py -n TelegramGroupCloner
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -180,9 +180,11 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-# Group auto chat
+# Main
 setting/
 sessions/
+tests/
+logs/
 *.session
 *.png
 *.jpg

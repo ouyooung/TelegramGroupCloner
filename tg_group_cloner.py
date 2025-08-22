@@ -1,49 +1,26 @@
-import configparser
-import logging
 import os
 import asyncio
 import random
 
 from typing import Dict
 from collections import defaultdict
-from typing import Optional, Union
+from typing import Optional
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.account import UpdateProfileRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import InputPhoto, InputChannel, PeerChat
+from telethon.tl.types import InputPhoto, InputChannel
 from telethon.tl.custom.message import Message
+from utils.log import logger
+from utils.file_ext import Config, load_config, init_files
+from modules import telegram_client
 
-clients_pool = {}
-client_locks = {}
+clients_pool: Dict[TelegramClient, Optional[int]] = {}
+client_locks: Dict[TelegramClient, asyncio.Lock] = {}
 sender_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-message_id_mapping = {}
-cloned_users = set()
-
-logging.getLogger('telethon').setLevel(logging.WARNING)
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler("app.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-
-class Config:
-    PROXY = None
-    SOURCE_GROUPS = []
-    TARGET_GROUP: Union[PeerChat, InputChannel]
-    USER_IDS = set()
-    KEYWORDS = set()
-    NAMES = set()
-    REPLACEMENTS = {}
-    API_ID = None
-    API_HASH = None
+message_id_mapping: Dict[int, int] = {}
+cloned_users: set[int] = set()
 
 
 async def login_new_account() -> None:
@@ -53,97 +30,26 @@ async def login_new_account() -> None:
 
     if not await client.is_user_authorized():
         y = await client.send_code_request(phone)
-        code = input('输入验证码: ')
+        code = input("输入验证码: ")
         try:
             await client.sign_in(phone, code, phone_code_hash=y.phone_code_hash)
         except SessionPasswordNeededError:
             password = input("请输入2FA 密码: ")
             await client.sign_in(password=password)
+    await client.disconnect()
+    logger.info(f"克隆账号添加成功: {phone}")
 
-    logger.info(f"克隆账号登录成功: {phone}")
 
+async def load_existing_sessions() -> None:
+    for filename in os.listdir("sessions"):
+        if filename.endswith(".session"):
+            session_name = filename.replace(".session", "")
 
-async def load_existing_sessions(choice: str) -> None:
-    for filename in os.listdir('sessions'):
-        if filename.endswith('.session'):
-            session_name = filename.replace('.session', '')
-            logger.info(f"正在加载 session: {session_name}")
-            client = TelegramClient(f"sessions/{session_name}", Config.API_ID, Config.API_HASH, proxy=Config.PROXY)
-            await client.connect()
-            if await client.is_user_authorized():
-                logger.info(f"加载成功 session: {session_name}")
-                if choice == '3':
-                    await delete_profile_photos(client)
-                elif choice == '4':
-                    await check_and_join_target(client)
+            client = await telegram_client.login_client(session_name)
+
+            if client:
                 clients_pool[client] = None
                 client_locks[client] = asyncio.Lock()
-            else:
-                logger.warning(f"未授权 session: {session_name}")
-                await client.disconnect()
-
-
-def load_config() -> None:
-    config_path = "setting/config.ini"
-    default_content = """[telegram]
-api_id = 9597683
-api_hash = 9981e2f10aeada4452a9538921132099
-source_group = ouyoung
-target_group = ouyoung
-
-[proxy]
-is_enabled = true
-host = 127.0.0.1
-port = 7890
-type = socks5
-
-[blacklist]
-user_ids = 123, 12345
-keywords = 广告, 出售
-names = 定制, 机器人
-
-[replacements]
-a = b
-你好 = 我好
-"""
-
-    os.makedirs("setting", exist_ok=True)
-    os.makedirs('sessions', exist_ok=True)
-    if not os.path.exists(config_path):
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(default_content)
-            logger.info(f"已初始化配置文件: {config_path}")
-
-    config = configparser.ConfigParser()
-    try:
-        config.read(config_path, encoding="utf-8-sig")
-
-        Config.API_HASH = config.get("telegram", "api_hash")
-        Config.API_ID = config.getint("telegram", "api_id")
-
-        raw_source_gps = config.get("telegram", "source_group")
-        Config.SOURCE_GROUPS = [source_gp for source_gp in raw_source_gps.split(",") if raw_source_gps.strip()]
-        Config.TARGET_GROUP = config.get("telegram", "target_group")
-
-        if config.getboolean("proxy", "is_enabled"):
-            host = config.get("proxy", "host")
-            port = config.getint("proxy", "port")
-            proxy_type = config.get("proxy", "type")
-            Config.PROXY = (proxy_type, host, port)
-
-        user_dis = config.get("blacklist", "user_ids", fallback="")
-        keywords = config.get("blacklist", "keywords", fallback="")
-        names = config.get("blacklist", "names", fallback="")
-        Config.USER_IDS.update(int(uid) for uid in user_dis.split(",") if uid.strip().isdigit())
-        Config.KEYWORDS.update(keyword for keyword in keywords.split(",") if keyword.strip())
-        Config.NAMES.update(name for name in names.split(",") if name.strip())
-
-        if config.has_section("replacements"):
-            Config.REPLACEMENTS.update(dict(config.items("replacements")))
-
-        logger.info(f"成功加载配置文件: {config_path}")
-    except Exception as e:
-        logger.error(f"配置加载失败: {e}")
 
 
 async def delete_profile_photos(client: TelegramClient) -> None:
@@ -187,96 +93,63 @@ async def check_and_join_source(client: TelegramClient, group: InputChannel) -> 
 
 async def clone_and_forward_message(event: Message, monitor_client: TelegramClient) -> None:
     sender = await event.get_sender()
-
     if not sender or sender.bot:
         return
 
     sender_id = sender.id
     full_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
     lock = sender_locks[sender_id]
+
     async with lock:
         if sender_id in Config.USER_IDS:
-            logger.info(f"{sender_id} ID在黑名单中，跳过")
+            logger.info(f"ID在黑名单中: {sender_id}")
             return
 
         if any(keyword in event.message.text for keyword in Config.KEYWORDS):
-            logger.info(f"{sender_id} 消息包含黑名单关键词，跳过")
+            logger.info(f"消息包含黑名单关键词: {sender_id}")
             return
 
         if any(name in full_name for name in Config.NAMES):
-            logger.info(f"{sender_id} 昵称包含黑名单名称，跳过")
+            logger.info(f"昵称包含黑名单名称: {sender_id}")
             return
 
-        # 已分配过的 client
         for client, cloned_user in clients_pool.items():
             if cloned_user == sender_id:
+                # 已分配过的 client
                 lock = client_locks[client]
                 async with lock:
-                    await asyncio.sleep(random.uniform(1, 3.5))
+                    await asyncio.sleep(random.uniform(0.5, 3.5))
                     try:
                         me = await client.get_me()
                         await forward_message_as(
                             client, event, monitor_client)
-                        logger.info(f"[{me.phone}] 转发 {sender_id} 的新消息")
+                        logger.info(f"[{me.phone}] 转发新消息: {sender_id}")
                     except Exception as e:
                         if "FROZEN_METHOD_INVALID" in str(e):
                             await cleanup_frozen_client(client, sender_id)
                         logger.warning(f"转发失败（已克隆用户）: {e}")
                 return
-
-        # 未分配的 client
-        for client, cloned_user in clients_pool.items():
-            client: TelegramClient
-            if cloned_user is None:
+            elif cloned_user is None:
+                # 未分配过的 client
                 lock = client_locks[client]
-                async with lock:  # <== 关键！锁住整个设置流程
+                async with lock:
                     try:
                         await monitor_client.get_input_entity(sender_id)
                         me = await client.get_me()
+                        phone = me.phone
 
-                        logger.info(f"[{me.phone}] 正在克隆新用户: {sender_id}")
-                        # 再次检查是否被其他协程分配了
-                        if clients_pool[client] is not None:
-                            continue
+                        logger.info(f"[{phone}] 正在克隆新用户: {sender_id}")
 
-                        # 设置昵称
-                        await client(UpdateProfileRequest(
-                            first_name=sender.first_name or " ",
-                            last_name=sender.last_name or "",
-                        ))
-                        logger.info(f"[{me.phone}] 设置昵称成功")
-
-                        # 设置头像
-                        try:
-                            photos = await monitor_client.get_profile_photos(sender, limit=1)
-                            if photos:
-                                profile_path = await monitor_client.download_media(photos[0])
-                                if profile_path and os.path.exists(profile_path):
-                                    uploaded = await client.upload_file(file=profile_path)
-                                    if photos[0].video_sizes:
-                                        await client(UploadProfilePhotoRequest(video=uploaded))
-                                    else:
-                                        await client(UploadProfilePhotoRequest(file=uploaded))
-                                    os.remove(profile_path)
-                                    logger.info(f"[{me.phone}] 设置头像成功")
-                                else:
-                                    logger.warning("头像无法下载")
-                            else:
-                                logger.info(f"{sender_id} 没有头像")
-                        except Exception as e:
-                            logger.error(f"设置头像出现错误: {e}")
-                            return
-
-                        # 发送消息
-                        await forward_message_as(
-                            client, event, monitor_client)
-
-                        # 分配完成
                         clients_pool[client] = sender_id
                         cloned_users.add(sender_id)
-                        logger.info(f"[{me.phone}] 完成新用户克隆: {sender_id}")
+
+                        await forward_message_as(client, event, monitor_client)
+
+                        await telegram_client.set_profile(client, monitor_client, sender, phone)
+
+                        logger.info(f"[{phone}] 完成新用户克隆: {sender_id}")
                     except ValueError:
-                        logger.warning(f"用户 {sender_id} 无法解析")
+                        logger.warning(f"用户无法解析: {sender_id}")
                     except Exception as e:
                         if "FROZEN_METHOD_INVALID" in str(e):
                             await cleanup_frozen_client(client, sender_id)
@@ -383,7 +256,7 @@ async def cleanup_frozen_client(client: TelegramClient, sender_id: Optional[int]
 
         # 从管理结构中移除
         clients_pool.pop(client, None)
-        client_locks.pop(client, None)
+        await client_locks.pop(client, None)
 
         if sender_id:
             cloned_users.discard(sender_id)
@@ -393,15 +266,15 @@ async def cleanup_frozen_client(client: TelegramClient, sender_id: Optional[int]
 
 
 async def start_monitor() -> None:
-    session_file = 'monitor'
+    session_file = "monitor"
     monitor_client = TelegramClient(session_file, Config.API_ID, Config.API_HASH, proxy=Config.PROXY)
 
     await monitor_client.connect()
 
     if not await monitor_client.is_user_authorized():
-        phone = input('请输入监听账号手机号: ')
+        phone = input("请输入监听账号手机号: ")
         y = await monitor_client.send_code_request(phone)
-        code = input('输入验证码: ')
+        code = input("输入验证码: ")
         try:
             await monitor_client.sign_in(phone, code, phone_code_hash=y.phone_code_hash)
         except SessionPasswordNeededError:
@@ -432,9 +305,24 @@ async def start_monitor() -> None:
     await monitor_client.run_until_disconnected()
 
 
+async def run(choice):
+    await load_existing_sessions()
+    if choice == "1":
+        await login_new_account()
+    elif choice == "2":
+        await start_monitor()
+    elif choice == "3":
+        for client in clients_pool.keys():
+            await delete_profile_photos(client)
+    elif choice == "4":
+        for client in clients_pool.keys():
+            await check_and_join_target(client)
+
+
 async def main():
     os.system("title TelegramGroupCloner")
 
+    init_files()
     load_config()
 
     print("\033[31mPowered by: 欧阳\033[0m")
@@ -451,23 +339,13 @@ async def main():
         print("3. 清空历史头像")
         print("4. 加入目标群")
 
-        try:
-            choice = input("请选择操作: ").strip()
-        except KeyboardInterrupt:
-            break
-
-        if choice == '1':
-            await login_new_account()
-        elif choice == '2':
-            await load_existing_sessions(choice)
-            await start_monitor()
-        elif choice == '3':
-            await load_existing_sessions(choice)
-            break
-        elif choice == '4':
-            await load_existing_sessions(choice)
-            break
+        choice = input("请选择操作: ").strip()
+        if choice:
+            await run(choice)
 
 
-if __name__ == '__main__':
-    asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

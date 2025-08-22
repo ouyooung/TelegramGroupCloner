@@ -20,7 +20,7 @@
 
 ## 环境要求
 
-1. Python 3.8 或更高版本
+1. Python 3.9 或更高版本
 2. 安装依赖库：
     ```bash
     pip install requirements.txt

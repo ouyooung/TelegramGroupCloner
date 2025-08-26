@@ -2,7 +2,7 @@ import os
 
 from typing import Union
 from telethon import TelegramClient
-from telethon.tl.functions.account import UpdateProfileRequest
+from telethon.tl.functions.account import UpdateProfileRequest, UpdateEmojiStatusRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest
 from telethon.tl.types import User
 from utils.file_ext import Config
@@ -51,7 +51,15 @@ async def set_profile(client: TelegramClient, monitor_client: TelegramClient, se
             else:
                 logger.warning(f"[{phone}] 头像无法下载: {sender_id}")
         else:
-            logger.info(f"[{phone}] 未设置头像: {sender_id}")
+            logger.info(f"[{phone}] 用户未设置头像: {sender_id}")
+        if sender.emoji_status:
+            me = await client.get_me()
+            if me.premium:
+                await client(UpdateEmojiStatusRequest(sender.emoji_status))
+                logger.info(f"[{phone}] 设置Emoji状态成功: {sender_id}，如果是礼物状态则无法设置")
+        else:
+            logger.info(f"[{phone}] 用户未设置状态: {sender_id}")
+
     except Exception as e:
         logger.error(f"设置资料出现错误: {e}")
 

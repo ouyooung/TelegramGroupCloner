@@ -2,8 +2,6 @@ import os
 import asyncio
 import random
 
-from typing import Dict
-from collections import defaultdict
 from typing import Optional
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
@@ -13,13 +11,7 @@ from telethon.tl.types import InputPhoto, InputChannel
 from telethon.tl.custom.message import Message
 from utils.log import logger
 from utils.file_ext import Config, load_config, init_files
-from modules import telegram_client
-
-clients_pool: Dict[TelegramClient, Optional[int]] = {}
-client_locks: Dict[TelegramClient, asyncio.Lock] = {}
-sender_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-message_id_mapping: Dict[int, int] = {}
-cloned_users: set[int] = set()
+from modules import telegram_client, error_handing, globals
 
 
 async def login_new_account() -> None:
@@ -47,8 +39,8 @@ async def load_existing_sessions() -> None:
             client = await telegram_client.login_client(session_name)
 
             if client:
-                clients_pool[client] = None
-                client_locks[client] = asyncio.Lock()
+                globals.clients_pool[client] = None
+                globals.client_locks[client] = asyncio.Lock()
 
 
 async def delete_profile_photos(client: TelegramClient) -> None:
@@ -97,7 +89,7 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
 
     sender_id = sender.id
     full_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
-    lock = sender_locks[sender_id]
+    lock = globals.sender_locks[sender_id]
 
     async with lock:
         if sender_id in Config.USER_IDS:
@@ -112,10 +104,10 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
             logger.info(f"昵称包含黑名单名称: {sender_id}")
             return
 
-        for client, cloned_user in clients_pool.items():
+        for client, cloned_user in globals.clients_pool.items():
             if cloned_user == sender_id:
                 # 已分配过的 client
-                lock = client_locks[client]
+                lock = globals.client_locks[client]
                 async with lock:
                     await asyncio.sleep(random.uniform(0.5, 3.5))
                     try:
@@ -130,7 +122,7 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
                 return
             elif cloned_user is None:
                 # 未分配过的 client
-                lock = client_locks[client]
+                lock = globals.client_locks[client]
                 async with lock:
                     try:
                         await monitor_client.get_input_entity(sender_id)
@@ -139,8 +131,8 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
 
                         logger.info(f"[{phone}] 正在克隆新用户: {sender_id}")
 
-                        clients_pool[client] = sender_id
-                        cloned_users.add(sender_id)
+                        globals.clients_pool[client] = sender_id
+                        globals.cloned_users.add(sender_id)
 
                         await forward_message_as(client, event, monitor_client)
 
@@ -174,8 +166,8 @@ async def forward_message_as(client: TelegramClient, event: Message, monitor_cli
                 logger.info(f"找到被回复消息: {reply.id}, 来自: {reply.sender_id}")
 
                 # 映射查找
-                if reply.id in message_id_mapping:
-                    reply_to_msg_id = message_id_mapping[reply.id]
+                if reply.id in globals.message_id_mapping:
+                    reply_to_msg_id = globals.message_id_mapping[reply.id]
                 else:
                     logger.info("没有找到对应的克隆账号消息，跳过回复")
                     return
@@ -203,10 +195,11 @@ async def forward_message_as(client: TelegramClient, event: Message, monitor_cli
                         reply_to=reply_to_msg_id
                     )
 
-                message_id_mapping[message.id] = sent_reply.id
+                globals.message_id_mapping[message.id] = sent_reply.id
 
             except Exception as e:
-                logger.warning(f"获取被回复消息失败: {e}")
+                msg = await error_handing.error_handle(e)
+                logger.error(f"发送回复消息失败: {msg}")
         else:
             try:
                 if message.media:
@@ -228,10 +221,11 @@ async def forward_message_as(client: TelegramClient, event: Message, monitor_cli
                         text
                     )
 
-                message_id_mapping[message.id] = sent.id
+                globals.message_id_mapping[message.id] = sent.id
 
             except Exception as e:
-                logger.error(f"发送当前消息失败: {e}")
+                msg = await error_handing.error_handle(e)
+                logger.error(f"发送当前消息失败: {msg}")
 
     except Exception as e:
         logger.error(f"获取当前用户信息失败: {e}")
@@ -254,11 +248,11 @@ async def cleanup_frozen_client(client: TelegramClient, sender_id: Optional[int]
         await client.disconnect()
 
         # 从管理结构中移除
-        clients_pool.pop(client, None)
-        await client_locks.pop(client, None)
+        globals.clients_pool.pop(client, None)
+        await globals.client_locks.pop(client, None)
 
         if sender_id:
-            cloned_users.discard(sender_id)
+            globals.cloned_users.discard(sender_id)
 
     except Exception as e:
         logger.warning(f"清理被冻结账号失败: {e}")
@@ -311,10 +305,10 @@ async def run(choice):
     elif choice == "2":
         await start_monitor()
     elif choice == "3":
-        for client in clients_pool.keys():
+        for client in globals.clients_pool.keys():
             await delete_profile_photos(client)
     elif choice == "4":
-        for client in clients_pool.keys():
+        for client in globals.clients_pool.keys():
             await check_and_join_target(client)
 
 

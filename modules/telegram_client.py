@@ -2,6 +2,7 @@ import os
 
 from typing import Union
 from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.account import UpdateProfileRequest, UpdateEmojiStatusRequest
 from telethon.tl.functions.photos import UploadProfilePhotoRequest
 from telethon.tl.types import User
@@ -9,17 +10,42 @@ from utils.file_ext import Config
 from utils.log import logger
 
 
-async def login_client(session_name) -> Union[TelegramClient, bool]:
+async def login_client(session_name: str, sign_in: bool = False) -> Union[TelegramClient, bool]:
     logger.info(f"正在加载: {session_name}")
 
-    client = TelegramClient(f"sessions/{session_name}", Config.API_ID, Config.API_HASH, proxy=Config.PROXY)
+    client = TelegramClient(f"{session_name}", Config.API_ID, Config.API_HASH, proxy=Config.PROXY)
     await client.connect()
 
     if not await client.is_user_authorized():
-        logger.info(f"未授权: {session_name}")
-        await client.disconnect()
-        await cleanup_not_authorized_client(session_name)
-        return False
+        if not sign_in:
+            logger.info(f"未授权: {session_name}")
+            await client.disconnect()
+            await cleanup_not_authorized_client(session_name)
+            return False
+
+        try:
+            phone = input("请输入手机号: ")
+            y = await client.send_code_request(phone)
+            code = input("输入验证码: ")
+            await client.sign_in(phone, code, phone_code_hash=y.phone_code_hash)
+
+        except SessionPasswordNeededError:
+            password = input("请输入2FA密码: ")
+            await client.sign_in(password=password)
+
+        except Exception as e:
+            logger.error(f"登录发生错误: {e}")
+            await client.disconnect()
+            return False
+
+        if not await client.is_user_authorized():
+            logger.error(f"登录失败: {session_name}")
+            await client.disconnect()
+            return False
+
+        logger.info(f"首次登录成功: {session_name}")
+        return client
+
     else:
         logger.info(f"加载成功: {session_name}")
         return client

@@ -4,7 +4,6 @@ import random
 
 from typing import Optional
 from telethon import TelegramClient, events
-from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.photos import DeletePhotosRequest
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.types import InputPhoto, InputChannel
@@ -16,18 +15,11 @@ from modules import telegram_client, error_handing, globals
 
 async def login_new_account() -> None:
     phone = input("输入手机号: ")
-    client = TelegramClient(f"sessions/{phone}", Config.API_ID, Config.API_HASH, proxy=Config.PROXY)
-    await client.connect()
-
-    if not await client.is_user_authorized():
-        y = await client.send_code_request(phone)
-        code = input("输入验证码: ")
-        try:
-            await client.sign_in(phone, code, phone_code_hash=y.phone_code_hash)
-        except SessionPasswordNeededError:
-            password = input("请输入2FA 密码: ")
-            await client.sign_in(password=password)
-    await client.disconnect()
+    client = await telegram_client.login_client(f"sessions/{phone}", True)
+    if not client:
+        logger.info(f"克隆账号添加失败")
+        return
+    client.disconnect()
     logger.info(f"克隆账号添加成功: {phone}")
 
 
@@ -36,7 +28,7 @@ async def load_existing_sessions() -> None:
         if filename.endswith(".session"):
             session_name = filename.replace(".session", "")
 
-            client = await telegram_client.login_client(session_name)
+            client = await telegram_client.login_client(f"sessions/{session_name}")
 
             if client:
                 globals.clients_pool[client] = None
@@ -118,7 +110,7 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
                     except Exception as e:
                         if "FROZEN_METHOD_INVALID" in str(e):
                             await cleanup_frozen_client(client, sender_id)
-                        logger.warning(f"转发失败（已克隆用户）: {e}")
+                        logger.error(f"转发失败（已克隆用户）: {e}")
                 return
             elif cloned_user is None:
                 # 未分配过的 client
@@ -140,11 +132,11 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
 
                         logger.info(f"[{phone}] 完成新用户克隆: {sender_id}")
                     except ValueError:
-                        logger.warning(f"用户无法解析: {sender_id}")
+                        logger.error(f"用户无法解析: {sender_id}")
                     except Exception as e:
                         if "FROZEN_METHOD_INVALID" in str(e):
                             await cleanup_frozen_client(client, sender_id)
-                            logger.warning(f"克隆失败: {e}")
+                            logger.error(f"克隆失败: {e}")
                     return
 
         logger.warning("无可用账号进行克隆")
@@ -255,24 +247,17 @@ async def cleanup_frozen_client(client: TelegramClient, sender_id: Optional[int]
             globals.cloned_users.discard(sender_id)
 
     except Exception as e:
-        logger.warning(f"清理被冻结账号失败: {e}")
+        logger.error(f"清理被冻结账号失败: {e}")
 
 
 async def start_monitor() -> None:
     session_file = "monitor"
-    monitor_client = TelegramClient(session_file, Config.API_ID, Config.API_HASH, proxy=Config.PROXY)
+    monitor_client = await telegram_client.login_client(session_file, True)
 
-    await monitor_client.connect()
+    if not monitor_client:
+        logger.warning(f"监听账号登录失败，已返回主菜单")
+        return
 
-    if not await monitor_client.is_user_authorized():
-        phone = input("请输入监听账号手机号: ")
-        y = await monitor_client.send_code_request(phone)
-        code = input("输入验证码: ")
-        try:
-            await monitor_client.sign_in(phone, code, phone_code_hash=y.phone_code_hash)
-        except SessionPasswordNeededError:
-            password = input("请输入2FA 密码: ")
-            await monitor_client.sign_in(password=password)
     me = await monitor_client.get_me()
     logger.info(f"监听账号登录成功: {me.phone}")
 

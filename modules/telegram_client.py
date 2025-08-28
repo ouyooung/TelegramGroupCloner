@@ -92,7 +92,7 @@ async def set_profile(client: TelegramClient, monitor_client: TelegramClient, se
 
 async def cleanup_not_authorized_client(session_name):
     try:
-        os.remove(f"sessions/{session_name}.session")
+        os.remove(f"{session_name}.session")
         logger.info(f"清理未授权session成功 {session_name}")
     except PermissionError:
         logger.warning(f"清理未授权session失败 {session_name}，文件正在使用中")

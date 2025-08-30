@@ -10,12 +10,12 @@ from telethon.tl.types import InputPhoto, InputChannel
 from telethon.tl.custom.message import Message
 from utils.log import logger
 from utils.file_ext import Config, load_config, init_files
-from modules import telegram_client, error_handing, globals
+from modules import client_manager, error_handing, globals
 
 
 async def login_new_account() -> None:
     phone = input("输入手机号: ")
-    client = await telegram_client.login_client(f"sessions/{phone}", True)
+    client = await client_manager.login_client(f"sessions/{phone}", True)
     if not client:
         logger.info(f"克隆账号添加失败")
         return
@@ -28,7 +28,7 @@ async def load_existing_sessions() -> None:
         if filename.endswith(".session"):
             session_name = filename.replace(".session", "")
 
-            client = await telegram_client.login_client(f"sessions/{session_name}")
+            client = await client_manager.login_client(f"sessions/{session_name}")
 
             if client:
                 globals.clients_pool[client] = None
@@ -128,7 +128,7 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
 
                         await forward_message_as(client, event, monitor_client)
 
-                        await telegram_client.set_profile(client, monitor_client, sender, phone)
+                        await client_manager.set_profile(client, monitor_client, sender, phone)
 
                         logger.info(f"[{phone}] 完成新用户克隆: {sender_id}")
                     except ValueError:
@@ -157,19 +157,16 @@ async def forward_message_as(client: TelegramClient, event: Message, monitor_cli
 
                 logger.info(f"找到被回复消息: {reply.id}, 来自: {reply.sender_id}")
 
-                # 映射查找
                 if reply.id in globals.message_id_mapping:
                     reply_to_msg_id = globals.message_id_mapping[reply.id]
                 else:
                     logger.info("没有找到对应的克隆账号消息，跳过回复")
                     return
 
-                # 发送消息（回复）
                 if message.media:
                     file_path = await monitor_client.download_media(message)
                     original_attributes = message.media.document.attributes
 
-                    # 发送文件，保持原有属性
                     sent_reply = await client.send_file(
                         target_group,
                         message.media,
@@ -197,7 +194,6 @@ async def forward_message_as(client: TelegramClient, event: Message, monitor_cli
                 if message.media:
                     file_path = await monitor_client.download_media(message)
                     original_attributes = message.media.document.attributes
-                    # 发送文件，保持原有属性
                     sent = await client.send_file(
                         target_group,
                         file_path,
@@ -236,10 +232,8 @@ async def cleanup_frozen_client(client: TelegramClient, sender_id: Optional[int]
         phone = (await client.get_me()).phone
         logger.info(f"[{phone}] 被冻结")
 
-        # 断开连接
         await client.disconnect()
 
-        # 从管理结构中移除
         globals.clients_pool.pop(client, None)
         await globals.client_locks.pop(client, None)
 
@@ -252,7 +246,8 @@ async def cleanup_frozen_client(client: TelegramClient, sender_id: Optional[int]
 
 async def start_monitor() -> None:
     session_file = "monitor"
-    monitor_client = await telegram_client.login_client(session_file, True)
+
+    monitor_client = await client_manager.login_client(session_file, True)
 
     if not monitor_client:
         logger.warning(f"监听账号登录失败，已返回主菜单")
@@ -261,7 +256,6 @@ async def start_monitor() -> None:
     me = await monitor_client.get_me()
     logger.info(f"监听账号登录成功: {me.phone}")
 
-    # 检查是否已经加入源群组
     try:
         for group in Config.SOURCE_GROUPS:
             await check_and_join_source(monitor_client, group)
@@ -270,7 +264,6 @@ async def start_monitor() -> None:
             await cleanup_frozen_client(monitor_client)
         logger.error(f"监听账号加入源群组失败: {str(er)}")
 
-    # 监听群组消息
     logger.info(f"开始监听消息")
 
     @monitor_client.on(events.NewMessage(chats=Config.SOURCE_GROUPS))
@@ -283,25 +276,32 @@ async def start_monitor() -> None:
     await monitor_client.run_until_disconnected()
 
 
-async def run(choice):
-    await load_existing_sessions()
-    if choice == "1":
-        await login_new_account()
-    elif choice == "2":
-        await start_monitor()
-    elif choice == "3":
-        for client in globals.clients_pool.keys():
-            await delete_profile_photos(client)
-    elif choice == "4":
-        for client in globals.clients_pool.keys():
-            await check_and_join_target(client)
+async def run(choice, menu):
+    if choice in menu:
+        _, func = menu[choice]
+        await func()
+    else:
+        print("无效的选择，请重试。")
+
+
+async def batch_run(action):
+    for client in globals.clients_pool.keys():
+        await action(client)
 
 
 async def main():
+    MENU = {
+        "1": ("新增账号", login_new_account),
+        "2": ("登录现有账号", load_existing_sessions),
+        "3": ("开始监听", start_monitor),
+        "4": ("清空历史头像", lambda: batch_run(delete_profile_photos)),
+        "5": ("加入目标群", lambda: batch_run(check_and_join_target)),
+    }
+
     os.system("title TelegramGroupCloner")
 
-    init_files()
-    load_config()
+    await init_files()
+    await load_config()
 
     print("\033[31mPowered by: 欧阳\033[0m")
     print("\033[31m交流群: https://t.me/oyDevelopersClub\033[0m")
@@ -312,14 +312,13 @@ async def main():
     print("\n↓↓↓↓↓↓↓ 选择你要执行的操作 ↓↓↓↓↓↓↓")
 
     while True:
-        print("\n1. 新增账号")
-        print("2. 开始监听")
-        print("3. 清空历史头像")
-        print("4. 加入目标群")
+        print("\n↓↓↓↓↓↓↓ 选择你要执行的操作 ↓↓↓↓↓↓↓")
+        for key, (desc, _) in MENU.items():
+            print(f"{key}. {desc}")
 
         choice = input("请选择操作: ").strip()
         if choice:
-            await run(choice)
+            await run(choice, MENU)
 
 
 if __name__ == "__main__":

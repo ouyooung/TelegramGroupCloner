@@ -2,6 +2,7 @@ import configparser
 import os
 
 from typing import Union
+
 from telethon.tl.types import InputChannel, PeerChat
 from utils.log import logger
 
@@ -18,7 +19,7 @@ class Config:
     API_HASH = None
 
 
-def load_config() -> None:
+async def load_config() -> None:
     config_path = "setting/config.ini"
     default_content = """[telegram]
 api_id = 9597683
@@ -55,7 +56,7 @@ a = b
         Config.API_ID = config.getint("telegram", "api_id")
 
         raw_source_gps = config.get("telegram", "source_group")
-        Config.SOURCE_GROUPS = [source_gp for source_gp in raw_source_gps.split(",") if raw_source_gps.strip()]
+        Config.SOURCE_GROUPS = [gp for gp in raw_source_gps.split(",") if raw_source_gps.strip()]
         Config.TARGET_GROUP = config.get("telegram", "target_group")
 
         if config.getboolean("proxy", "is_enabled"):
@@ -79,6 +80,6 @@ a = b
         logger.warning(f"配置加载失败: {e}")
 
 
-def init_files():
+async def init_files():
     os.makedirs("setting", exist_ok=True)
     os.makedirs("sessions", exist_ok=True)

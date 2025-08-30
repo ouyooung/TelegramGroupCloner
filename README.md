@@ -61,6 +61,9 @@ blacklist：黑名单配置，指定不希望克隆消息的用户ID或关键词
 
 replacements：字符串替换配置，允许将指定文本替换为另一个文本。
 
+## 使用说明：
+将克隆账号session文件放入sessions目录下，启动程序，首次启动时需要登录监听账号
+
 ## 其他说明
 - 作者Telegram：https://t.me/ouyoung
 - 交流群Telegram：https://t.me/oyDevelopersClub

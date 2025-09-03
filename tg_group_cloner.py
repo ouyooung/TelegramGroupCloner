@@ -6,7 +6,7 @@ from typing import Optional
 from telethon import TelegramClient, events
 from telethon.tl.functions.photos import DeletePhotosRequest
 from telethon.tl.functions.channels import JoinChannelRequest
-from telethon.tl.types import InputPhoto, InputChannel
+from telethon.tl.types import InputPhoto
 from telethon.tl.custom.message import Message
 from utils.log import logger
 from utils.file_ext import Config, load_config, init_files
@@ -64,9 +64,10 @@ async def check_and_join_target(client: TelegramClient) -> None:
             logger.info(e)
 
 
-async def check_and_join_source(client: TelegramClient, group: InputChannel) -> None:
+async def check_and_join_source(client: TelegramClient) -> None:
     try:
-        await client(JoinChannelRequest(group))
+        for group in Config.SOURCE_GROUPS:
+            await client(JoinChannelRequest(group))
         logger.info("监听账号加入源群组成功")
     except Exception as e:
         if "FROZEN_METHOD_INVALID" in str(e):
@@ -83,19 +84,19 @@ async def clone_and_forward_message(event: Message, monitor_client: TelegramClie
     full_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip()
     lock = globals.sender_locks[sender_id]
 
+    if sender_id in Config.USER_IDS:
+        logger.info(f"ID在黑名单中: {sender_id}")
+        return
+
+    if any(keyword in event.message.text for keyword in Config.KEYWORDS):
+        logger.info(f"消息包含黑名单关键词: {sender_id}")
+        return
+
+    if any(name in full_name for name in Config.NAMES):
+        logger.info(f"昵称包含黑名单名称: {sender_id}")
+        return
+
     async with lock:
-        if sender_id in Config.USER_IDS:
-            logger.info(f"ID在黑名单中: {sender_id}")
-            return
-
-        if any(keyword in event.message.text for keyword in Config.KEYWORDS):
-            logger.info(f"消息包含黑名单关键词: {sender_id}")
-            return
-
-        if any(name in full_name for name in Config.NAMES):
-            logger.info(f"昵称包含黑名单名称: {sender_id}")
-            return
-
         for client, cloned_user in globals.clients_pool.items():
             if cloned_user == sender_id:
                 # 已分配过的 client
@@ -256,13 +257,7 @@ async def start_monitor() -> None:
     me = await monitor_client.get_me()
     logger.info(f"监听账号登录成功: {me.phone}")
 
-    try:
-        for group in Config.SOURCE_GROUPS:
-            await check_and_join_source(monitor_client, group)
-    except Exception as er:
-        if "FROZEN_METHOD_INVALID" in str(er):
-            await cleanup_frozen_client(monitor_client)
-        logger.error(f"监听账号加入源群组失败: {str(er)}")
+    await check_and_join_source(monitor_client)
 
     logger.info(f"开始监听消息")
 
@@ -312,7 +307,6 @@ async def main():
     print("\n↓↓↓↓↓↓↓ 选择你要执行的操作 ↓↓↓↓↓↓↓")
 
     while True:
-        print("\n↓↓↓↓↓↓↓ 选择你要执行的操作 ↓↓↓↓↓↓↓")
         for key, (desc, _) in MENU.items():
             print(f"{key}. {desc}")
 
